@@ -42,6 +42,7 @@ def configure_api_key():
         raise ValueError("Invalid OpenAI API key format.")
     
     openai.api_key = api_key
+    return api_key
 
 def get_embeddings(text: str) -> list:
     """
