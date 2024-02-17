@@ -20,6 +20,7 @@ from typing import Dict
 import os
 import requests
 import logging
+import numpy as np
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -44,7 +45,7 @@ def configure_api_key():
     openai.api_key = api_key
     return api_key
 
-def get_embeddings(text: str) -> list:
+def get_embeddings(text: str) -> np.ndarray:
     """
     Fetches embeddings for the given text using OpenAI's API with a specified model.
 
@@ -63,7 +64,11 @@ def get_embeddings(text: str) -> list:
             model="text-embedding-3-large"
         )
         embeddings = response.data[0].embedding  # Accessing the embeddings from the response
+        # Here, embeddings is of type list, as it is a list of floats returned by the API.
+        # Before returning, we convert it to a numpy array for consistency with other parts of the codebase.
+        embeddings = np.array(embeddings)
         return embeddings
+    
     except Exception as e:
         logger.error(f"An error occurred while fetching embeddings: {e}")
         raise
