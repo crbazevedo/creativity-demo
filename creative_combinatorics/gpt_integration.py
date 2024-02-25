@@ -11,9 +11,11 @@ from typing import List, Dict
 import creative_combinatorics.api_client as api_client
 import random, requests
 import numpy as np
+import json
+import markdown
 from rdflib import Graph, URIRef, Literal, Namespace, BNode
 from rdflib.namespace import RDF, XSD
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote
 from creative_combinatorics.knowledge_graph import KnowledgeGraph
 from creative_combinatorics.api_client import get_embeddings, generate_text
 
@@ -22,8 +24,13 @@ class CreativeTextGenerator:
         self.knowledge_graph = knowledge_graph
 
     def parse_query(self, text):
+
+        # Open and read the text contents
+        with open(text, 'r') as file:
+            text = file.read()
+
         api_key = api_client.configure_api_key()
-        endpoint = 'https://api.openai.com/v1/completions'
+        endpoint = 'https://api.openai.com/v1/chat/completions'
         
         headers = {
             'Authorization': f'Bearer {api_key}',
@@ -35,19 +42,43 @@ class CreativeTextGenerator:
                   "So, for each pair of concepts, assume either no relationship or generate at least one triple. Return the analysis in JSON format with lists of triples for each attribute."
         
         data = {
-            'model': 'gpt-4-turbo', 
-            'prompt': prompt,
-            'max_tokens': 50000,
+            'model': 'gpt-4-turbo-preview', 
+            'max_tokens': 4096,
             'temperature': 0.1,
             'top_p': 1.0,
             'frequency_penalty': 0.0,
             'presence_penalty': 0.0,
+            'messages': [
+                {
+                "role": "system",
+                "content": "You are a highly qualified knowledge graph extractor, an expert in extracting triples " +\
+                           "(knowledge triplets composed of subject, predicate, object) from text."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }]
         }
         
         response = requests.post(endpoint, headers=headers, json=data)
-        
+        print(response.json())    
+
         if response.status_code == 200:
             response_data = response.json()
+
+            # Assuming `response_data['choices'][0]['message']['content']` contains the markdown string
+            content = response_data['choices'][0]['message']['content']
+            markdown_dict = markdown.markdown(content)
+            json_start = markdown_dict.find('{')
+            json_end = markdown_dict.find('}', json_start) + 1
+            json_block = markdown_dict[json_start:json_end]
+            print(f"JSON start: {json_start}, JSON end: {json_end}")
+            print(f"JSON block: {json_block}")
+
+            # Convert the JSON block into a Python dictionary
+            json_object = json.loads(json_block)
+            #print(f"JSON object: {json_object}")
+
             # Process the JSON response to extract triples of concepts and relationships.
             # Extracted information should be in the format: {'triples': ['(concept1,relation,concept2)',...]}
             # Try-catch block that checks that it containts all exepcted keys
@@ -57,45 +88,58 @@ class CreativeTextGenerator:
                     # We get a list of triples in the format `(concept1, relation, concept2)`. So, we need to split each triple into its components.
                     # The concepts correspond to the first and third elements of each triple, and the relationships correspond to the second element.
                     # First, we get the list of triples from the response data.
-                    'triples': [triple['text'] for triple in response_data['choices'][0]['logprobs']['top_level']]
+                    # We transform response_data['choices'][0]['message']['content'], which contains a json string, to a json type object
+                    'triples': [triple for triple in json_object['relationships']]
                 }
+
+                print (f"Extracted info: {extracted_info}")
             except KeyError:
                 return f"Error: {response.text}"
             return extracted_info
         else:
             return f"Error: {response.text}"
 
+    @staticmethod
     def build_knowledge_graph_from_triples(triples: List[str]) -> KnowledgeGraph:
-        # Initialize the knowledge graph
         kg = KnowledgeGraph()
 
-        # Unique concepts set to avoid duplicate calculations
-        unique_concepts = set()
+        # Process each triple safely
+        for triple in triples['triples']:
+            # Here we split the triple into its components and remove the initial and end parenthesis
+            parts = triple.split(',')
+            parts = [part.strip('()') for part in parts]
 
-        # Extract concepts from triples and add them to the unique concepts set
-        concepts = [concept.strip() for triple in triples for concept in (triple.split(',')[0], triple.split(',')[2])]
-        unique_concepts.update(concepts)
-
-        # Calculate embeddings and add nodes to the knowledge graph
-        for concept in unique_concepts:
-            embedding = KnowledgeGraph.calculate_embeddings_for_text(concept)
-            kg.add_node(concept, embedding)
-
-        # Add edges based on relationships
-        for triple in triples:
-            concept1, relation, concept2 = [element.strip() for element in triple.split(',')]
-            kg.add_edge(concept1, relation, concept2)
+            # Ensure exactly three parts are present
+            if len(parts) == 3:
+                concept1, relation, concept2 = [part.strip() for part in parts]
+                
+                # Add concepts if they're not already in the graph
+                if concept1 not in kg.graph:
+                    print (f"Adding concept: {concept1} to the graph")
+                    embedding = kg.calculate_embeddings_for_text(concept1)
+                    kg.add_concept(concept1, {'embedding': embedding})
+                if concept2 not in kg.graph:
+                    print (f"Adding concept: {concept2} to the graph")
+                    embedding = kg.calculate_embeddings_for_text(concept2)
+                    kg.add_concept(concept2, {'embedding': embedding})
+                
+                # Add the relationship
+                print(f"Adding relationship: {concept1} -> {relation} -> {concept2}")
+                kg.add_relationship(concept1, concept2, {relation})
+            else:
+                print(f"Skipping malformed triple: {triple}")
 
         return kg
 
-    def save_knowledge_graph_as_turtle(kg: KnowledgeGraph, file_path: str):
+    def save_knowledge_graph_as_turtle(self, kg: KnowledgeGraph, file_path: str):
         g = Graph()
         
         # Define your namespaces
         MY_NS = Namespace("http://example.org/my_knowledge_graph#")
         
         for concept, attrs in kg.get_all_concepts():
-            concept_uri = URIRef(MY_NS[concept])
+            safe_concept = quote(concept)
+            concept_uri = URIRef(MY_NS[safe_concept])
             # Here, add the concept node to the RDF graph with a generic type or more specific based on your class's structure
             g.add((concept_uri, RDF.type, MY_NS.Concept))
             
@@ -105,10 +149,15 @@ class CreativeTextGenerator:
             embedding_str = ','.join(map(str, attrs['embedding']))
             g.add((concept_uri, MY_NS.embedding, Literal(embedding_str, datatype=XSD.string)))
                 
-        for source, relation_type, target, _ in kg.get_all_relations():
-            source_uri = URIRef(MY_NS[source])
-            target_uri = URIRef(MY_NS[target])
-            relation_uri = MY_NS[relation_type]  # This could be a more specific URI based on your application's ontology
+        for source, target, relation_type in kg.get_all_relations():
+            print(f"Adding relation: {source} -> {list(relation_type['relationships'])[0]} -> {target}")
+            safe_source = quote(source)
+            safe_relation_type = quote(list(relation_type['relationships'])[0])
+            safe_target = quote(target)
+
+            source_uri = URIRef(MY_NS[safe_source])
+            target_uri = URIRef(MY_NS[safe_target])
+            relation_uri = MY_NS[safe_relation_type]  # This could be a more specific URI based on your application's ontology
             g.add((source_uri, relation_uri, target_uri))
 
         # Serialize the graph to Turtle format and save to file

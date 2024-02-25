@@ -1,5 +1,12 @@
+import os
 import faiss
-import openai
+from openai import OpenAI
+from dotenv import load_dotenv
+
+load_dotenv()
+
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
 import networkx as nx
 import numpy as np
 from typing import Callable, Dict, Any, Set, List
@@ -34,7 +41,7 @@ class KnowledgeGraph:
             self.graph.nodes[node]['embedding'] = self.calculate_concept_embeddings(node)
     
     def add_concept(self, concept: str, attributes: Dict[str, Any]):
-        if 'embeddings' not in attributes:
+        if 'embedding' not in attributes:
             raise ValueError("Missing 'embeddings' attribute in concept attributes.")
         self.graph.add_node(concept, **attributes)
 
@@ -64,16 +71,22 @@ class KnowledgeGraph:
 
         return parse_dict(concept_attributes)
 
-    def calculate_embeddings_for_text(text: str) -> List[float]:
-        """
-        Calculates embeddings for the given text using OpenAI's API with a specified model.
-        """
-        # Calculate embeddings using OpenAI's API
-        response = openai.Embedding.create(
-            input=text,
-            model="text-embedding-3-large"  
-        )
-        return response['data'][0]['embedding']
+    def calculate_embeddings_for_text(self, text: str) -> List[float]:
+            """
+            Calculates embeddings for the given text using OpenAI's API with a specified model.
+
+            Args:
+                text (str): The input text for which embeddings need to be calculated.
+
+            Returns:
+                List[float]: The calculated embeddings for the given text.
+            """
+            print ("Calculating embeddings for text: ", text)
+            # Calculate embeddings using OpenAI's API
+            response = client.embeddings.create(input=text,
+            model="text-embedding-3-large")
+            #print ("Response: ", response)
+            return response.data[0].embedding
         
     
     def calculate_embeddings_for_dicts(self, concept_attributes: Dict[str, Any]) -> List[float]:

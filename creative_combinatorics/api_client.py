@@ -21,13 +21,19 @@ import os
 import requests
 import logging
 import numpy as np
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 import re
-import openai
+from openai import OpenAI
+
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def configure_api_key():
     """
@@ -42,7 +48,7 @@ def configure_api_key():
     if not re.match(r'^[A-Za-z0-9-_]+$', api_key):
         raise ValueError("Invalid OpenAI API key format.")
     
-    openai.api_key = api_key
+    
     return api_key
 
 def get_embeddings(text: str) -> np.ndarray:
@@ -59,10 +65,8 @@ def get_embeddings(text: str) -> np.ndarray:
     - Exception: If the API call fails or returns an error.
     """
     try:
-        response = openai.Embedding.create(
-            input=text,
-            model="text-embedding-3-large"
-        )
+        response = client.embeddings.create(input=text,
+        model="text-embedding-3-large")
         embeddings = response.data[0].embedding  # Accessing the embeddings from the response
         # Here, embeddings is of type list, as it is a list of floats returned by the API.
         # Before returning, we convert it to a numpy array for consistency with other parts of the codebase.
@@ -90,15 +94,13 @@ def generate_text(prompt: str) -> str:
 
 
     try:
-        response = openai.Completion.create(
-            engine="gpt-4-turbo-preview",
-            prompt=prompt,
-            max_tokens=8000,
-            messages=[
-                {"role": "system", "content": "You are a highly creative writer."},
-                {"role": "user", "content": prompt}
-            ]
-        )
+        response = client.completions.create(engine="gpt-4-turbo-preview",
+        prompt=prompt,
+        max_tokens=8000,
+        messages=[
+            {"role": "system", "content": "You are a highly creative writer."},
+            {"role": "user", "content": prompt}
+        ])
         generated_text = response.choices[0].message  # Accessing the generated text from the response
         return generated_text
     except Exception as e:

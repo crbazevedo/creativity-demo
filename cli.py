@@ -52,24 +52,32 @@ def main():
         creative_text = CreativeTextGenerator.generate_creative_text(args.prompt)
         print(creative_text)
     elif args.command == 'build_save_kg':
+        kg = KnowledgeGraph()
         # Instantiate CreativeTextGenerator
-        text_generator = CreativeTextGenerator()
+        text_generator = CreativeTextGenerator(knowledge_graph=kg)
 
         # Use the instance to call parse_query
         parsed_triples = text_generator.parse_query(args.text)
         
         # Assuming build_knowledge_graph_from_triples is correctly defined/imported
+        
         kg = text_generator.build_knowledge_graph_from_triples(parsed_triples)
         
         # Assuming save_knowledge_graph_as_turtle is correctly defined/imported
         text_generator.save_knowledge_graph_as_turtle(kg, args.file_path)
         print(f"KG built and saved to {args.file_path}")
     elif args.command == 'load_generate':
-        # Load the KG from the Turtle file
-        kg = load_knowledge_graph_from_turtle(args.file_path)
-        # Generate novel concepts based on the loaded KG
-        # Note: You'll need to adapt generate_creative_text to use the loaded KG for this functionality
-        creative_text = "Functionality to generate novel concepts based on the KG needs to be implemented."
+        kg = KnowledgeGraph()
+        # Instantiate CreativeTextGenerator
+        text_generator = CreativeTextGenerator(knowledge_graph=kg)
+
+        
+        # Load the KnowledgeGraph from the Turtle file
+        kg = text_generator.load_knowledge_graph_from_turtle(args.file_path)
+        print(f"KG loaded from {args.file_path}")
+        
+        # Now you can use text_generator to generate creative text based on the KG
+        creative_text = text_generator.generate_creative_text("Some prompt or logic to generate text")
         print(creative_text)
     else:
         parser.print_help()
