@@ -38,11 +38,10 @@ class KnowledgeGraph:
     
     def encode_nodes(self):
         for node in self.graph.nodes():
+            print(f"node: {node}, content: {self.graph.nodes[node]}")
             self.graph.nodes[node]['embedding'] = self.calculate_concept_embeddings(node)
     
     def add_concept(self, concept: str, attributes: Dict[str, Any]):
-        if 'embedding' not in attributes:
-            raise ValueError("Missing 'embeddings' attribute in concept attributes.")
         self.graph.add_node(concept, **attributes)
 
     def remove_concept(self, concept: str):
@@ -71,7 +70,8 @@ class KnowledgeGraph:
 
         return parse_dict(concept_attributes)
 
-    def calculate_embeddings_for_text(self, text: str) -> List[float]:
+    @staticmethod
+    def calculate_embeddings_for_text(text: str) -> List[float]:
             """
             Calculates embeddings for the given text using OpenAI's API with a specified model.
 
@@ -122,16 +122,26 @@ class KnowledgeGraph:
         # Retrieve the concept's attributes, relationships, and neighbor nodes up to the specified depth
         # The neighbor nodes will be used to incorporate information from the edges and relationships between nodes.
         concept_attributes = self.graph.nodes[concept]
+        #print(f"concept: {concept}, attributes: {concept_attributes}")
         neighbor_nodes = list(nx.single_source_shortest_path_length(self.graph, concept, cutoff=depth).keys())
+        #print(f"neighbor_nodes: {neighbor_nodes}")
         neighbor_attributes = {node: self.graph.nodes[node] for node in neighbor_nodes}
+        #print(f"neighbor_attributes: {neighbor_attributes}")
         concept_relationships = self.get_concept_relationships(concept)
+        #print(f"concept_relationships: {concept_relationships}")
 
         # Add concept_relationships to the concept_attributes
         concept_attributes['relationships'] = concept_relationships
+        #print(f"concept_attributes: {concept_attributes}")
 
+        # Exclude the 'embedding' attribute from the concept and neighbor attributes
+        concept_attributes.pop('embedding', None)
+        for neighbor in neighbor_attributes:
+            neighbor_attributes[neighbor].pop('embedding', None)
 
         # Add neighbor attributes to the concept attributes
         combined_attributes = {**concept_attributes, **neighbor_attributes}
+        print(f"combined_attributes: {combined_attributes}")
 
         # Calculate embeddings for the combined attributes
         concept_embeddings = self.calculate_embeddings_for_dicts(combined_attributes)
@@ -146,8 +156,8 @@ class KnowledgeGraph:
         similarity_score = np.dot(embeddings1, embeddings2) / (np.linalg.norm(embeddings1) * np.linalg.norm(embeddings2))
         return similarity_score
     
-    # This function will return a subset of nodes from the graph that are most similar to the input concepts.
-    def get_most_similar_combined_concepts(self, combined_concepts: np.ndarray, n: int) -> List[Dict]:
+    # This function will return a subset of subgraphs from the graph that are most similar to the input concepts.
+    def get_most_similar_subgraphs(self, combined_concepts: np.ndarray, n: int):
         """
         Retrieves the top n most similar concepts to the input concepts based on their embeddings.
         Parameters:
@@ -161,24 +171,48 @@ class KnowledgeGraph:
         # The result is a dictionary where keys are the nearest concepts and values are the similarity scores.
 
         # Construct a flat index and add the combined_concepts to it
-        index = faiss.IndexFlatL2(combined_concepts.shape[1])
-        # We need to add all the node embeddings from the graph to the index
-        graph_node_embeddings = [self.graph.nodes[node]['embedding'] for node in self.graph.nodes()]
+        
+        print(f"combined_concepts: {combined_concepts}")
+        print(f"nodes: {self.graph.nodes()}")
+        print(f"graph: {self.graph}")
+
+        nodes_subgraphs = [{'subgraph': self.get_concept_subgraph(node), 'embedding': get_embeddings(self.get_concept_subgraph(node))} for node in self.graph.nodes()]
+        graph_node_embeddings = np.vstack([node['embedding'] for node in nodes_subgraphs])
+
+        print(f"nodes_subgraphs: {nodes_subgraphs}")
+        print(f"graph_node_embeddings.shape: {graph_node_embeddings.shape}")
+        print(f"graph_node_embeddings: {graph_node_embeddings}")
+        index = faiss.IndexFlatL2(combined_concepts.shape[0])
         index.add(graph_node_embeddings)
         # We now search for the nearest neighbors of combined_concepts in the index
-        D, I = index.search(combined_concepts, n)
+        # Assuming combined_concepts is initially a 1D array
+        if combined_concepts.ndim == 1:
+            combined_concepts = np.array([combined_concepts])  # Reshape to 2D for FAISS
+
+        # Proceed with the FAISS search
+        S = index.search(combined_concepts, n)
+        D, I = S
+        print(f"I: {I}, D: {D}")
+        nn_index = I[0][0]
+        print(f"nn_index: {nn_index}")
+        print(f"combined_concepts.shape: {combined_concepts.shape}")
+        nn_vector = graph_node_embeddings[nn_index]
+        nn_subgraph = nodes_subgraphs[nn_index]['subgraph']
+        print(f"nn_vector: {nn_vector}")
+        print(f"nn_subgraph: {nn_subgraph}")
 
         # Here, D is the distance and I is the index of the nearest neighbor.
         # We can use I to retrieve the nearest concepts from the knowledge graph.
 
         # Retrieve the nearest concepts from the knowledge graph.
         # Here, I[0] contains the indices of the nearest concepts.
-        nearest_concepts = [self.graph.nodes[concept] for concept in I[0]]
+        print(f"nn_vector: {nn_vector}")
+        nearest_subgraphs = [nodes_subgraphs[concept] for concept in I[0]]
 
         # Here `nearest_concepts` is of type list, and it contains the nearest concepts to the input combined_concepts.
         # Each element of the list is a dictionary containing the attributes of the nearest concept. That's why we 
         # specify the return type of this function as List[Dict].
-        return nearest_concepts
+        return D[0][0], nearest_subgraphs
 
 
     def get_most_similar_concepts(self, concepts: List[str], n: int):
@@ -215,6 +249,17 @@ class KnowledgeGraph:
         # Returns the rearest concepts and their distance
         return nearest_concepts, D[0] 
 
+    # Return the stored nodes which are of type 'embedding' in the graph
+    def get_concept_embeddings(self) -> List[np.ndarray]:
+        """
+        Retrieves the embeddings of all concepts in the graph.
+
+        Returns:
+        - list: A list of numpy arrays, each representing the embeddings of a concept.
+        """
+        return [self.graph.nodes[concept]['embedding'] for concept in self.graph.nodes() if 'embedding' in self.graph.nodes[concept]]
+
+
     def get_concept_relationships(self, concept):
         return self.graph.edges(concept, data=True)    
 
@@ -223,7 +268,16 @@ class KnowledgeGraph:
         # The result is a numpy array of embeddings.
         return get_embeddings(concept)
 
-
+    # Return Graph node neighbors
+    def get_concept_neighbors(self, concept):
+        return list(self.graph.neighbors(concept))
+    
+    # Return the subgraph corresponding to a node's neighborhood
+    def get_concept_subgraph(self, concept, depth=1):
+        subgraph = nx.single_source_shortest_path_length(self.graph, concept, cutoff=depth)
+        print(f"subgraph: {subgraph}")
+        return subgraph
+        
 
     def set_concept_embeddings(self, concept, embedding):
         self.graph.nodes[concept]['embedding'] = embedding

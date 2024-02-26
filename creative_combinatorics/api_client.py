@@ -91,17 +91,38 @@ def generate_text(prompt: str) -> str:
     Raises:
     - Exception: If the API call fails or returns an error.
     """
+    endpoint = 'https://api.openai.com/v1/chat/completions'
+    api_key = configure_api_key()
 
+    headers = {
+        'Authorization': f'Bearer {api_key}',
+        'Content-Type': 'application/json',
+    }
 
     try:
-        response = client.completions.create(engine="gpt-4-turbo-preview",
-        prompt=prompt,
-        max_tokens=8000,
-        messages=[
-            {"role": "system", "content": "You are a highly creative writer."},
-            {"role": "user", "content": prompt}
-        ])
-        generated_text = response.choices[0].message  # Accessing the generated text from the response
+        
+        data = {
+            'model': 'gpt-4-turbo-preview', 
+            'max_tokens': 4096,
+            'temperature': 0.1,
+            'top_p': 1.0,
+            'frequency_penalty': 0.0,
+            'presence_penalty': 0.0,
+            'messages': [
+                {
+                "role": "system",
+                "content": "You are a highly creative writer that knows how to combine concepts and relationships from knowledge graphs with user provided content to generate novel text."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }]
+        }
+        
+        response = requests.post(endpoint, headers=headers, json=data).json()
+        print(response)
+
+        generated_text = response['choices'][0]['message']['content']  # Accessing the generated text from the response
         return generated_text
     except Exception as e:
         logger.error(f"An error occurred while generating text: {e}")

@@ -13,6 +13,7 @@ import random, requests
 import numpy as np
 import json
 import markdown
+import rdflib
 from rdflib import Graph, URIRef, Literal, Namespace, BNode
 from rdflib.namespace import RDF, XSD
 from urllib.parse import urlparse, quote
@@ -23,12 +24,14 @@ class CreativeTextGenerator:
     def __init__(self, knowledge_graph: KnowledgeGraph):
         self.knowledge_graph = knowledge_graph
 
-    def parse_query(self, text):
+    def parse_query(self, text, return_json=False):
 
-        # Open and read the text contents
-        with open(text, 'r') as file:
-            text = file.read()
-
+        # Determine if the input is a file path or a string
+        if text.endswith('.txt'):
+            # Open and read the text contents
+            with open(text, 'r') as file:
+                text = file.read()
+        
         api_key = api_client.configure_api_key()
         endpoint = 'https://api.openai.com/v1/chat/completions'
         
@@ -48,6 +51,7 @@ class CreativeTextGenerator:
             'top_p': 1.0,
             'frequency_penalty': 0.0,
             'presence_penalty': 0.0,
+            'response_format': {'type': 'json_object'},
             'messages': [
                 {
                 "role": "system",
@@ -68,34 +72,42 @@ class CreativeTextGenerator:
 
             # Assuming `response_data['choices'][0]['message']['content']` contains the markdown string
             content = response_data['choices'][0]['message']['content']
-            markdown_dict = markdown.markdown(content)
-            json_start = markdown_dict.find('{')
-            json_end = markdown_dict.find('}', json_start) + 1
-            json_block = markdown_dict[json_start:json_end]
+            json_start = content.find('{')
+            json_end = content.rfind('}') + 1  # Use rfind to ensure we get the last }
+            json_block = content[json_start:json_end]
             print(f"JSON start: {json_start}, JSON end: {json_end}")
             print(f"JSON block: {json_block}")
-
-            # Convert the JSON block into a Python dictionary
             json_object = json.loads(json_block)
+            # Convert the JSON block into a Python dictionary
+            try:
+                json_object = json.loads(json_block)
+            except json.decoder.JSONDecodeError as e:
+                print(f"Failed to decode JSON: {e}")
+                print("Faulty JSON block:", json_block)
+                
+
             #print(f"JSON object: {json_object}")
 
             # Process the JSON response to extract triples of concepts and relationships.
             # Extracted information should be in the format: {'triples': ['(concept1,relation,concept2)',...]}
             # Try-catch block that checks that it containts all exepcted keys
-            try:
-                # response_data contains the parsed query in JSON format, so we can extract the concepts, relationships, and task
-                extracted_info = {
-                    # We get a list of triples in the format `(concept1, relation, concept2)`. So, we need to split each triple into its components.
-                    # The concepts correspond to the first and third elements of each triple, and the relationships correspond to the second element.
-                    # First, we get the list of triples from the response data.
-                    # We transform response_data['choices'][0]['message']['content'], which contains a json string, to a json type object
-                    'triples': [triple for triple in json_object['relationships']]
-                }
+            if return_json == False:
+                try:
+                    # response_data contains the parsed query in JSON format, so we can extract the concepts, relationships, and task
+                    extracted_info = {
+                        # We get a list of triples in the format `(concept1, relation, concept2)`. So, we need to split each triple into its components.
+                        # The concepts correspond to the first and third elements of each triple, and the relationships correspond to the second element.
+                        # First, we get the list of triples from the response data.
+                        # We transform response_data['choices'][0]['message']['content'], which contains a json string, to a json type object
+                        'triples': [triple for triple in json_object['relationships']]
+                    }
 
-                print (f"Extracted info: {extracted_info}")
-            except KeyError:
-                return f"Error: {response.text}"
-            return extracted_info
+                    print (f"Extracted info: {extracted_info}")
+                except KeyError:
+                    return f"Error: {response.text}"
+                return extracted_info
+            else:
+                return json_object
         else:
             return f"Error: {response.text}"
 
@@ -104,10 +116,12 @@ class CreativeTextGenerator:
         kg = KnowledgeGraph()
 
         # Process each triple safely
+        print(f"triple: {triples}")
+        print(f"Processing {len(triples['triples'])} triples")
         for triple in triples['triples']:
-            # Here we split the triple into its components and remove the initial and end parenthesis
-            parts = triple.split(',')
-            parts = [part.strip('()') for part in parts]
+            # Here we split the triple into its components and remove the initial and end brackets
+            # List has no attribute strip, so instead we will use the replace method
+            parts = triple.replace('[','').replace(']','').split(',')
 
             # Ensure exactly three parts are present
             if len(parts) == 3:
@@ -144,10 +158,10 @@ class CreativeTextGenerator:
             g.add((concept_uri, RDF.type, MY_NS.Concept))
             
             # Serialize embeddings as a single attribute, if present
-        if 'embedding' in attrs:
-            # Convert the embedding list to a string representation
-            embedding_str = ','.join(map(str, attrs['embedding']))
-            g.add((concept_uri, MY_NS.embedding, Literal(embedding_str, datatype=XSD.string)))
+            if 'embedding' in attrs:
+                # Convert the embedding list to a string representation
+                embedding_str = ','.join(map(str, attrs['embedding']))
+                g.add((concept_uri, MY_NS.embedding, Literal(embedding_str, datatype=XSD.string)))
                 
         for source, target, relation_type in kg.get_all_relations():
             print(f"Adding relation: {source} -> {list(relation_type['relationships'])[0]} -> {target}")
@@ -163,52 +177,28 @@ class CreativeTextGenerator:
         # Serialize the graph to Turtle format and save to file
         g.serialize(destination=file_path, format='turtle')
 
+    @staticmethod
     def load_knowledge_graph_from_turtle(file_path: str) -> KnowledgeGraph:
         kg = KnowledgeGraph()
-        
         g = Graph()
         g.parse(file_path, format="turtle")
         
-        # Iterate over all RDF triples in the graph
         for subject, predicate, obj in g:
-            # Simplify the URIRefs and Literals to strings
-            subject_str = str(subject)
-            predicate_str = str(predicate)
-            obj_str = str(obj) if isinstance(obj, Literal) else str(obj)
+            # Simplify URIs for better readability in the visualization
+            subject_id = subject.split('#')[-1]
+            predicate_id = predicate.split('#')[-1]
+            obj_str = obj.split('#')[-1] if isinstance(obj, rdflib.term.URIRef) else str(obj)
             
-            # Extract the local name of the subject and predicate for use as identifiers in the KnowledgeGraph
-            subject_id = urlparse(subject_str).path.split('/')[-1]
-            predicate_id = urlparse(predicate_str).path.split('/')[-1]
-            
-            # Check if the predicate represents a relationship, an attribute, or an embedding
-            if predicate_id == "type":
-                # Type assertion; handle accordingly by setting a type attribute
-                if not kg.graph.has_node(subject_id):
-                    kg.add_concept(subject_id, {'type': obj_str})
-                else:
-                    kg.graph.nodes[subject_id]['type'] = obj_str
-            elif predicate_id == "embedding":
-                # This triple represents an embedding; parse and add/update the node with this embedding
-                embedding_list = np.array([float(x) for x in obj_str.split(',')])  # Convert string back to list of floats
-                if not kg.graph.has_node(subject_id):
-                    kg.add_concept(subject_id, {'embedding': embedding_list})
-                else:
-                    kg.graph.nodes[subject_id]['embedding'] = embedding_list
+            # Correct handling based on predicate type
+            if predicate_id == "embedding":
+                embedding_list = np.array([float(x) for x in obj_str.split(',')])
+                kg.add_concept(subject_id, {'embedding': embedding_list})
             elif isinstance(obj, Literal):
-                # Attribute of the subject
-                if not kg.graph.has_node(subject_id):
-                    kg.add_concept(subject_id, {predicate_id: obj_str})
-                else:
-                    kg.graph.nodes[subject_id][predicate_id] = obj_str
+                kg.add_concept(subject_id, {predicate_id: obj_str.replace('%20', ' ')})
             else:
-                # Relationship
-                target_id = urlparse(str(obj)).path.split('/')[-1]
-                if not kg.graph.has_node(subject_id):
-                    kg.add_concept(subject_id, {})
-                if not kg.graph.has_node(target_id):
-                    kg.add_concept(target_id, {})
-                kg.add_relationship(subject_id, target_id, {predicate_id})
-
+                target_id = obj_str
+                kg.add_relationship(subject_id, target_id, {predicate_id.replace('%20', ' ')})
+        
         return kg
 
 
@@ -223,11 +213,19 @@ class CreativeTextGenerator:
         Returns:
         - float: The similarity score between the two sets of embeddings.
         """
-        # Example similarity calculation
+
+        # Ensure embeddings1 is a 1D array
+        embeddings1 = np.ravel(embeddings1)  # This flattens embeddings1 to 1D if it's not already
+
+        # Ensure embeddings2 is also a 1D array, assuming embeddings2 is the variable for most_similar_concept_embeddings
+        embeddings2 = np.ravel(embeddings2)  # This flattens embeddings2 to 1D
+
+        # Now calculate the similarity score
         similarity_score = np.dot(embeddings1, embeddings2) / (np.linalg.norm(embeddings1) * np.linalg.norm(embeddings2))
+
         return similarity_score
 
-    def generate_concept_combinations(self, parsed_query: Dict) -> List[Dict]:
+    def generate_concept_combinations(self, parsed_query: Dict, pct_combinations: float =1.0) -> List[Dict]:
         """
         Generates combinations of concepts based on the parsed query.
 
@@ -237,14 +235,23 @@ class CreativeTextGenerator:
         Returns:
         - list: A list of concept combinations.
         """
-       
+        print(f"Parsed query: {parsed_query}")
+        # Convert pased query to a dictionary
         # Find extracted concepts and relationships from the parsed query
-        concepts = parsed_query.get('concepts', [])
+        concepts = parsed_query.get('concepts')
+        # WHat parsed_query.get('relationships', []) returns if the key is not present in the dictionary is an empty list
         relationships = parsed_query.get('relationships', [])
+
+        print(f"Concepts: {concepts}, Relationships: {relationships}")
 
         # Generate concept combinations and add relationship information in a dictionary
         concept_combinations = []
         
+        # Computes number of pairwise combinations of concepts
+        num_combinations = len(concepts) * (len(concepts) - 1)
+        num_combinations = int(num_combinations * pct_combinations)
+        count = 0
+
         for concept1 in concepts:
             for concept2 in concepts:
                 if concept1 != concept2:
@@ -261,11 +268,15 @@ class CreativeTextGenerator:
                         ],
                         "relationship_embedding": self.knowledge_graph.get_concept_embeddings(random.choice(relationships))
                     }
+                    print(f"Combination: {combination}")
                     concept_combinations.append(combination)
+                    count += 1
+            if count >= num_combinations:
+                break
         
         return concept_combinations
 
-    def rank_concept_combinations(self, concept_combinations: List[Dict], kg: KnowledgeGraph) -> List[Dict]:
+    def rank_concept_combinations(self, concept_combinations: List[Dict]) -> List[Dict]:
         """
         Ranks concept combinations based on semantic similarity and knowledge graph insights.
 
@@ -292,19 +303,19 @@ class CreativeTextGenerator:
             combined_embeddings = concept1_embeddings + relationship_embeddings + concept2_embeddings
             combined_embeddings /= np.linalg.norm(combined_embeddings) if np.linalg.norm(combined_embeddings) != 0 else 1
 
-            # Retrieve the most similar concept embeddings from the knowledge graph
-            most_similar_concept_embeddings = kg.get_most_similar_combined_concepts(combined_embeddings, 1)
-            similarity_score = self.calculate_similarity_score(combined_embeddings, most_similar_concept_embeddings)
+            # Retrieve the most similar subgraphs  from the knowledge graph
+            similarity_score, most_similar_subgraphs = self.knowledge_graph.get_most_similar_subgraphs(combined_embeddings, 1)
 
             # Add similarity score to the combination dictionary
             combination["similarity_score"] = similarity_score
+            combination["most_similar_subgraphs"] = most_similar_subgraphs
             ranked_combinations.append(combination)
         
         # Sort concept combinations based on similarity score
         ranked_combinations.sort(key=lambda x: x["similarity_score"], reverse=True)
         return ranked_combinations
 
-    def craft_gpt_prompt(self, task: str, concept_combination: List[str]) -> str:
+    def craft_gpt_prompt(self, task: str, content: str, concept_combination: List[str]) -> str:
         """
         Crafts a GPT-4 prompt based on a concept combination and knowledge graph insights.
 
@@ -315,12 +326,24 @@ class CreativeTextGenerator:
         str: A crafted prompt for GPT-4 incorporating the selected concept combination and insights from the knowledge graph.
         """
 
+        # Remove the 'embedding' key from the concept combination
+        combinations = []
+        for combination in concept_combination['most_similar_subgraphs']:
+            del combination['embedding']
+            combinations.append(combination)
+
         # The reason the following prompt works is because it is a placeholder for the actual prompt that would be crafted based on the concept combination and the task.
         # Particularly, the task would be used to guide the prompt generation process, and the concept combination would be used to provide context and constraints for the creative text generation.
-        prompt = f"Perform task '{task}' using concepts: [".join(concept_combination) + "], exploring their unique relationship."
-        return prompt
+        prompt = f"You goal is to generate a PROMPT instructing a LLM to perform the TASK ['{task}']. "\
+                 f"You should write the prompt in plain natural language and rephrase the TASK in the context provided in the following KNOWLEDGE SUBGRAPH: ['{combinations}']. "\
+                 f"Remember the list of concepts.  "\
+                 f"The concepts should be combined with the MAIN CONCEPT PAIR: Concept Pair 1['{concept_combination['concept_pair'][0]}'] "\
+                 f"and Concept Pair 2['{concept_combination['concept_pair'][1]}']. Their RELATIONSHIP is ['{concept_combination['relationship']}']. "\
+                 f"Your goal is to generate write the PROMPT naturally combining the elements in the KNOWLEDGE SUGBRAGH and the MAIN CONCEPT PAIR to produce enriched and contextual instructions. "\
+                 f"The enriched and contextual instructions will also consider  the extraction of concepts and relationships from the USER PROVIDED CONTENT: ['{content}']."
+        return generate_text(prompt)
     
-    def generate_creative_text(self, query: str) -> str:
+    def generate_creative_text(self, instruction: str, content: str) -> str:
         """
         Generates creative text based on the input query by leveraging a knowledge graph and GPT-4.
 
@@ -330,11 +353,18 @@ class CreativeTextGenerator:
         Returns:
         - str: The generated creative text.
         """
-        parsed_query = self.parse_query(query)
-        concept_combinations = self.generate_concept_combinations(parsed_query)
+        creative_texts = {}
+        parsed_query = self.parse_query(content,return_json=True)
+        concept_combinations = self.generate_concept_combinations(parsed_query, pct_combinations=0.005)
+        print(f"Generated {len(concept_combinations)} concept combinations")
+        #print(f"Concept combinations: {concept_combinations}")
+
         ranked_combinations = self.rank_concept_combinations(concept_combinations)
+        print(f"Rank: {ranked_combinations}")
         for combination in ranked_combinations:
-            prompt = self.craft_gpt_prompt(parsed_query['task'], combination)
+            prompt = self.craft_gpt_prompt(instruction, content, combination)
+            print(f"Combination: {combination}, Prompt: {prompt}")
             creative_text = generate_text(prompt)
-            return creative_text
-        return "No creative text generated."
+            print(f"Creative text: {creative_text}")
+            creative_texts.update({content: creative_text})
+        return creative_texts

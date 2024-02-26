@@ -42,6 +42,8 @@ def main():
     # New command for loading the KG and generating novel concepts
     parser_load_generate = subparsers.add_parser('load_generate', help='Load KG and generate novel concepts')
     parser_load_generate.add_argument('file_path', type=str, help='Path of the KG Turtle file to load')
+    parser_load_generate.add_argument('prompt', type=str, help='Prompt for creative text generation')
+    parser_load_generate.add_argument('content', type=str, help='Content to generate novel concepts from')
 
     args = parser.parse_args()
 
@@ -66,19 +68,18 @@ def main():
         # Assuming save_knowledge_graph_as_turtle is correctly defined/imported
         text_generator.save_knowledge_graph_as_turtle(kg, args.file_path)
         print(f"KG built and saved to {args.file_path}")
-    elif args.command == 'load_generate':
-        kg = KnowledgeGraph()
+    elif args.command == 'load_generate': 
+        # Load the KnowledgeGraph from the Turtle file
+        kg = CreativeTextGenerator.load_knowledge_graph_from_turtle(args.file_path)
+        kg.encode_nodes()
+        print(f"KG loaded from {args.file_path}")
+
         # Instantiate CreativeTextGenerator
         text_generator = CreativeTextGenerator(knowledge_graph=kg)
-
-        
-        # Load the KnowledgeGraph from the Turtle file
-        kg = text_generator.load_knowledge_graph_from_turtle(args.file_path)
-        print(f"KG loaded from {args.file_path}")
         
         # Now you can use text_generator to generate creative text based on the KG
-        creative_text = text_generator.generate_creative_text("Some prompt or logic to generate text")
-        print(creative_text)
+        creative_texts = text_generator.generate_creative_text(args.prompt, args.content)
+        print(creative_texts)
     else:
         parser.print_help()
 
