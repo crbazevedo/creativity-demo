@@ -41,8 +41,16 @@ class CreativeTextGenerator:
         }
         
         # Update the prompt to instruct GPT-4 to analyze the query for concepts, relationships, and tasks
-        prompt = f"Given the query: '{text}', identify the 'concepts', 'relationships', and 'task'. Assume the relationships are formatted as a triple string `(concept1, relation, concept2)`. "+\
-                  "So, for each pair of concepts, assume either no relationship or generate at least one triple. Return the analysis in JSON format with lists of triples for each attribute."
+        prompt = f"Given the query: '{text}', identify the 'concepts', 'relationships', and 'task'. Assume the relationships are formatted as a triple string "\
+                 f"`(concept1, relation, concept2)`. So, for each pair of concepts, assume either no relationship or generate at least one triple. "\
+                 f"Return the analysis in JSON format with lists of triples for each attribute. "\
+                 f"Focus on the main topic of the input and deduce which concepts and relationships are most relevant. "\
+                 f"If the query include examples, you can encode the concepts in the examples with the relationship 'an example of' ."\
+                 f"Concepts can be single words or multi-word expressions. Relationships can be verbs or verb phrases. "\
+                 f"Concepts can also be whole sentences or paragraphs to represent more complex ideas such as events or actions. "\
+                 f"Relationships can also be encoded as a single word or multi-word expressions. "\
+                 f"Relationships can also be temporal, spatial, or causal. "\
+                 f"Add as many concepts and relationships as you can find in the input. "\
         
         data = {
             'model': 'gpt-4-turbo-preview', 
@@ -176,6 +184,54 @@ class CreativeTextGenerator:
 
         # Serialize the graph to Turtle format and save to file
         g.serialize(destination=file_path, format='turtle')
+
+    @staticmethod
+    def update_knowledge_graph_from_triples(kg: KnowledgeGraph, triples: List[str]) -> KnowledgeGraph:
+        """
+        Updates a knowledge graph with new concepts and relationships from a list of triples.
+
+        Args:
+            kg (KnowledgeGraph): The knowledge graph to update.
+            triples (List[str]): A list of triples in the format '[concept1, relation, concept2]'.
+
+        Returns:
+            KnowledgeGraph: The updated knowledge graph.
+        """
+        # Process each triple safely
+        for triple in triples:
+            # Here we split the triple into its components and remove the initial and end brackets
+            parts = triple.replace('[','').replace(']','').split(',')
+
+            # Ensure exactly three parts are present
+            if len(parts) == 3:
+                concept1, relation, concept2 = [part.strip() for part in parts]
+                embedding1, embedding2, normalized_sum = None, None, None
+
+                # Add concepts if they're not already in the graph
+                if concept1 not in kg.graph:
+                    embedding1 = kg.calculate_embeddings_for_text(concept1)
+                    kg.add_concept(concept1, {'embedding': embedding1})
+                if concept2 not in kg.graph:
+                    embedding2 = kg.calculate_embeddings_for_text(concept2)
+                    kg.add_concept(concept2, {'embedding': embedding2})
+                
+                # Add the relationship
+                kg.add_relationship(concept1, concept2, {relation})
+
+                # Normalized sum of embeddings
+                if embedding1 is not None and embedding2 is not None:
+                    normalized_sum = (embedding1 + embedding2) / np.linalg.norm(embedding1 + embedding2)
+
+                # Search for similar concepts and add relationships to the graph
+                similar_concepts = kg.get_most_similar_concepts(normalized_sum, 3)
+
+                for similar_concept in similar_concepts:
+                    kg.add_relationship(similar_concept, concept1, {'similar_to'})
+                    kg.add_relationship(similar_concept, concept2, {'similar_to'})
+            else:
+                print(f"Skipping malformed triple: {triple}")
+
+        return kg
 
     @staticmethod
     def load_knowledge_graph_from_turtle(file_path: str) -> KnowledgeGraph:

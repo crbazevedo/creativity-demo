@@ -45,6 +45,12 @@ def main():
     parser_load_generate.add_argument('prompt', type=str, help='Prompt for creative text generation')
     parser_load_generate.add_argument('content', type=str, help='Content to generate novel concepts from')
 
+    # New command for updating the KG from ingested text
+    parser_update_kg = subparsers.add_parser('update_kg', help='Update KG from ingested text')
+    parser_update_kg.add_argument('file_path', type=str, help='Path of the KG Turtle file to update')
+    parser_update_kg.add_argument('text', type=str, help='Input text to update KG from')
+
+
     args = parser.parse_args()
 
     if args.command == 'embeddings':
@@ -80,6 +86,26 @@ def main():
         # Now you can use text_generator to generate creative text based on the KG
         creative_texts = text_generator.generate_creative_text(args.prompt, args.content)
         print(creative_texts)
+    elif args.command == 'update_kg':
+        # Load the KnowledgeGraph from the Turtle file
+        kg = CreativeTextGenerator.load_knowledge_graph_from_turtle(args.file_path)
+        kg.encode_nodes()
+        print(f"KG loaded from {args.file_path}")
+
+        # Instantiate CreativeTextGenerator
+        text_generator = CreativeTextGenerator(knowledge_graph=kg)
+
+        # Use the instance to call parse_query
+        parsed_triples = text_generator.parse_query(args.text)
+
+        # Assuming update_knowledge_graph_from_triples is correctly defined/imported
+        kg = text_generator.update_knowledge_graph_from_triples(kg, parsed_triples)
+
+        # Assuming save_knowledge_graph_as_turtle is correctly defined/imported
+        text_generator.save_knowledge_graph_as_turtle(kg, args.file_path)
+
+        print(f"KG updated and saved to {args.file_path}")
+
     else:
         parser.print_help()
 
