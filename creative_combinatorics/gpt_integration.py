@@ -42,7 +42,8 @@ class CreativeTextGenerator:
         
         # Update the prompt to instruct GPT-4 to analyze the query for concepts, relationships, and tasks
         prompt = f"Given the query: '{text}', identify the 'concepts', 'relationships', and 'task'. Assume the relationships are formatted as a triple string "\
-                 f"`(concept1, relation, concept2)`. So, for each pair of concepts, assume either no relationship or generate at least one triple. "\
+                 f"`(concept1, relation, concept2)`, within PARENTESHES. Do not use dicts to represent triples. Use parantheses notation, only. "\
+                 f"All triple shall be not-null, i.e., no missing values are allowed. "\
                  f"Return the analysis in JSON format with lists of triples for each attribute. "\
                  f"Focus on the main topic of the input and deduce which concepts and relationships are most relevant. "\
                  f"If the query include examples, you can encode the concepts in the examples with the relationship 'an example of' ."\
@@ -198,38 +199,41 @@ class CreativeTextGenerator:
             KnowledgeGraph: The updated knowledge graph.
         """
         # Process each triple safely
-        for triple in triples:
+        for triple in triples["triples"]:
             # Here we split the triple into its components and remove the initial and end brackets
-            parts = triple.replace('[','').replace(']','').split(',')
+            # Triple will be a string in the format '[concept1, relation, concept2]' or '(concept1, relation, concept2)'.
+            # We need to split it into its components and remove the initial and end brackets (or parentheses).
 
-            # Ensure exactly three parts are present
-            if len(parts) == 3:
-                concept1, relation, concept2 = [part.strip() for part in parts]
-                embedding1, embedding2, normalized_sum = None, None, None
+            embedding1, embedding2 = None, None
 
-                # Add concepts if they're not already in the graph
-                if concept1 not in kg.graph:
-                    embedding1 = kg.calculate_embeddings_for_text(concept1)
-                    kg.add_concept(concept1, {'embedding': embedding1})
-                if concept2 not in kg.graph:
-                    embedding2 = kg.calculate_embeddings_for_text(concept2)
-                    kg.add_concept(concept2, {'embedding': embedding2})
-                
-                # Add the relationship
-                kg.add_relationship(concept1, concept2, {relation})
-
-                # Normalized sum of embeddings
-                if embedding1 is not None and embedding2 is not None:
-                    normalized_sum = (embedding1 + embedding2) / np.linalg.norm(embedding1 + embedding2)
-
-                # Search for similar concepts and add relationships to the graph
-                similar_concepts = kg.get_most_similar_concepts(normalized_sum, 3)
-
-                for similar_concept in similar_concepts:
-                    kg.add_relationship(similar_concept, concept1, {'similar_to'})
-                    kg.add_relationship(similar_concept, concept2, {'similar_to'})
+            # Check if the triple is in the correct format
+            if triple[0] in ['[', '('] and triple[-1] in [']', ')']:
+                parts = triple[1:-1].split(',')
+                # Ensure exactly three parts are present
+                if len(parts) == 3:
+                    concept1, relation, concept2 = [part.strip() for part in parts]
+                    # Add concepts if they're not already in the graph
+                    if concept1 not in kg.graph:
+                        embedding1 = kg.calculate_embeddings_for_text(concept1)
+                        kg.add_concept(concept1, {'embedding': embedding1})
+                    if concept2 not in kg.graph:
+                        embedding2 = kg.calculate_embeddings_for_text(concept2)
+                        kg.add_concept(concept2, {'embedding': embedding2})
+                    # Add the relationship
+                    if concept1 in kg.graph and concept2 in kg.graph:
+                        kg.add_relationship(concept1, concept2, {relation})
+                else:
+                    print(f"Skipping malformed triple: {triple}")
             else:
                 print(f"Skipping malformed triple: {triple}")
+
+            # Search for similar concepts and add relationships to the graph
+            similar_concepts1 = kg.get_most_similar_concepts([concept1], 3)
+            similar_concepts2 = kg.get_most_similar_concepts([concept2], 3)
+
+            for similar_concept1, similar_concept2 in zip(similar_concepts1, similar_concepts2):
+                kg.add_relationship(similar_concept1, concept1, {'similar_to'})
+                kg.add_relationship(similar_concept2, concept2, {'similar_to'})
 
         return kg
 
@@ -238,6 +242,20 @@ class CreativeTextGenerator:
         kg = KnowledgeGraph()
         g = Graph()
         g.parse(file_path, format="turtle")
+
+        def clean_encoded_string(encoded_string):
+            import re, urllib
+            # Pattern to find all occurrences of percent encoding
+            # finalizing with a space or 28 (hex for open parenthesis)
+            pattern = re.compile(r'(%25)+20', re.IGNORECASE)
+            
+            # Replace multiple encodings with a single space
+            cleaned_string = pattern.sub(' ', encoded_string)
+            
+            # Decode the cleaned string in case there are other encoded characters
+            decoded_string = urllib.parse.unquote(cleaned_string)
+            
+            return decoded_string
         
         for subject, predicate, obj in g:
             # Simplify URIs for better readability in the visualization

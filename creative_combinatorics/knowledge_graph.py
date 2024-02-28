@@ -229,35 +229,53 @@ class KnowledgeGraph:
         input_concepts = ','.join(concepts)
 
         # Embedd the input_concepts
-        input_concepts_embeddings = self.get_concept_embeddings(input_concepts)
+        input_concepts_embeddings = self.list_concept_embeddings()
+        print(f"input_concepts_embeddings: {input_concepts_embeddings}")
 
         # Computes n-nearest neighbors for the input_concepts_embeddings
         # The result is a dictionary where keys are the nearest concepts and values are the similarity scores.
 
+        # input_concepts_embeddings is a list of numpy arrays, each representing the embeddings of a concept.
+        # But faiss requires a 2D numpy array, so we stack the embeddings to create a 2D array.
+        input_concepts_embeddings = np.vstack(input_concepts_embeddings)
+
+        
+
         # Construct a flat index and add the input_concepts_embeddings to it
         index = faiss.IndexFlatL2(input_concepts_embeddings.shape[1])
         index.add(input_concepts_embeddings)
-        D, I = index.search(input_concepts_embeddings, n)
+
+
+        # We need to ensure that the input_concepts_embeddings is a 2D array
+        input_embeddings = self.get_concept_embeddings(input_concepts)
+        if input_embeddings.ndim == 1:
+            input_embeddings = np.array([input_embeddings])
+
+        D, I = index.search(input_embeddings, n)
 
         # Here, D is the distance and I is the index of the nearest neighbor.
         # We can use I to retrieve the nearest concepts from the knowledge graph.
 
         # Retrieve the nearest concepts from the knowledge graph.
         # Here, I[0] contains the indices of the nearest concepts.
-        nearest_concepts = [self.graph.nodes[concept] for concept in I[0]]
+
+        # Get a list of graph nodes
+        graph_nodes = list(self.graph.nodes())
+
+        nearest_concepts = [graph_nodes[concept] for concept in I[0]]
 
         # Returns the rearest concepts and their distance
-        return nearest_concepts, D[0] 
+        return nearest_concepts
 
     # Return the stored nodes which are of type 'embedding' in the graph
-    def get_concept_embeddings(self) -> List[np.ndarray]:
+    def list_concept_embeddings(self) -> List[np.ndarray]:
         """
         Retrieves the embeddings of all concepts in the graph.
 
         Returns:
         - list: A list of numpy arrays, each representing the embeddings of a concept.
         """
-        return [self.graph.nodes[concept]['embedding'] for concept in self.graph.nodes() if 'embedding' in self.graph.nodes[concept]]
+        return [np.array(self.graph.nodes[concept]['embedding']) for concept in self.graph.nodes() if 'embedding' in self.graph.nodes[concept]]
 
 
     def get_concept_relationships(self, concept):
